@@ -1,7 +1,7 @@
 {
   "scripts": {
     "start": "parcel serve index.html",
-    "build": "parcel build --public-url \"./\" -d site index.html"
+    "build": "parcel build --public-url \\\"./\\\" -d docs index.html"
   },
   "dependencies": {
     "@types/three": "^0.126.0",
