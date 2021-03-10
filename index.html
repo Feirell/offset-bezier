@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Bezier</title>
+    <!--    <script src="./src/index.ts"></script>-->
+    <script src="./src/interactive.ts"></script>
+
+    <style>
+
+        body {
+            margin: 0px;
+            width: 100vw;
+            height: 100vh;
+
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+
+            padding: 40px;
+
+            box-sizing: border-box;
+        }
+
+        #aside {
+            flex-grow: 1;
+            margin-left: 20px;
+            height: 902px;
+
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        #aside > * {
+            border: 1px solid grey;
+        }
+
+        #aside > :not(:first-child) {
+            margin-top: 20px;
+        }
+
+        #control {
+            padding: 10px;
+        }
+
+        #control label, #control input {
+            cursor: pointer;
+        }
+
+        #control label{
+            user-select: none;
+        }
+
+        #debug-output {
+            flex-grow: 1;
+            font-family: Consolas;
+            padding: 10px;
+            box-sizing: border-box;
+            white-space: pre;
+        }
+
+        canvas {
+            border: 1px solid grey;
+        }
+    </style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<aside id="aside">
+    <output id="debug-output"></output>
+    <div id="control"></div>
+</aside>
+</body>
+</html>
