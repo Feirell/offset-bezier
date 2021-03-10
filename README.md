@@ -3,7 +3,7 @@
 This is meant to easily show how a simple approximation for the offset bezier has its limitation 
 and how other approaches diverge from this approximation.
 
-[visualisation]()
+[visualisation](https://feirell.github.io/offset-bezier/)
 
 ## What this is
 
