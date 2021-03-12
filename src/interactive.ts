@@ -1,7 +1,6 @@
-import {StaticBezier} from '../../nd-bezier/src/static-bezier';
-
 import {EventEmitter} from "event-emitter-typesafe";
 import {fitSystemNewApproach, V2} from "./fit-system";
+import {StaticBezier} from "nd-bezier";
 
 const height = 900;
 const width = 1400;
@@ -63,6 +62,7 @@ function drawPolyline(ctx: CanvasRenderingContext2D, points: Vector2[]) {
     ctx.closePath();
 }
 
+/*
 function getPointsLeftAndRightFromBezier(points: Vector2[], t: number, distance: number): [V2, V2, V2] {
     const asc = ascent(points, t);
     const ascLength = Math.sqrt(asc[0] * asc[0] + asc[1] * asc[1]);
@@ -82,9 +82,28 @@ function getPointsLeftAndRightFromBezier(points: Vector2[], t: number, distance:
         [point[0] + -ascNorm[1], point[1] + ascNorm[0]]
     ];
 }
+*/
+
+function getPointsLeftAndRightFromBezier(points: Vector2[], t: number, distance: number): [V2, V2, V2] {
+    const staticBezier = new StaticBezier(points);
+
+    const leftPoint = staticBezier.offsetPointLeft(t, distance) as V2;
+    const rightPoint = staticBezier.offsetPointRight(t, distance) as V2;
+
+    return [
+        // left point
+        leftPoint,
+
+        // center point
+        staticBezier.at(t) as V2,
+
+        // right point
+        rightPoint
+    ];
+}
 
 function drawOffsetBezier(ctx: CanvasRenderingContext2D, pinPoints: V2[], spikes: number, distance: number, renderSpikes: boolean) {
-    if (spikes == 0 || pinPoints.length != 4)
+    if (spikes == 0 || pinPoints.length < 2)
         return;
 
     const rightSideLines: [Vector2, Vector2][] = [];
@@ -148,7 +167,7 @@ function drawOffsetBezier(ctx: CanvasRenderingContext2D, pinPoints: V2[], spikes
 }
 
 function drawBezier(pinPoints: Vector2[], ctx: CanvasRenderingContext2D, lines: number, spikes = lines) {
-    if (pinPoints.length < 2 || pinPoints.length > 4)
+    if (pinPoints.length < 2)
         return;
 
     const bezier = new StaticBezier(pinPoints);
@@ -162,8 +181,10 @@ function drawBezier(pinPoints: Vector2[], ctx: CanvasRenderingContext2D, lines: 
 }
 
 const options = {
+    approachDistance: ["1. Approach: Normal-Vector", true],
+    approachControlPoints: ["2. Approach: Shift control points", false],
     spikes: ["Spikes for offset Beziér", false],
-    attachedCoords: ["Write coordinates attached to node", false]
+    attachedCoords: ["Write coordinates attached to node", false],
 }
 
 function getOption(key: keyof typeof options) {
@@ -500,11 +521,14 @@ function initialize() {
             }
 
             for (const event of occurredEvents) {
-                if (event.type == "click") {
-                    // if (setPoints.length == 4)
-                    //     setPoints.shift();
-                    //
-                    // setPoints.push(event.position);
+                const [x, y] = event.position;
+                if (event.type == "click" && x >= 0 && x <= width && y >= 0 && y <= height) {
+                    const elem = getHitPoint(setPoints, event.position, pointRadius);
+                    if (elem != undefined) {
+                        setPoints.splice(elem, 1);
+                    } else {
+                        setPoints.push(event.position);
+                    }
                 }
             }
 
@@ -512,7 +536,7 @@ function initialize() {
 
             const numberOfLines = 40;
 
-            if (setPoints.length == 4) {
+            if (setPoints.length > 1) {
 
                 ctx.fillStyle = 'black';
                 ctx.lineWidth = 4;
@@ -520,33 +544,38 @@ function initialize() {
 
                 drawBezier(setPoints, ctx, numberOfLines);
 
-                drawOffsetBezier(ctx, setPoints, numberOfLines, distance, getOption("spikes"));
+                if (getOption("approachDistance"))
+                    drawOffsetBezier(ctx, setPoints, numberOfLines, distance, getOption("spikes"));
 
                 ctx.fillStyle = 'black';
                 ctx.strokeStyle = "#000";
 
-                for (const side of ['left', 'right']) {
-                    const morphed = fitSystemNewApproach(setPoints, side as any, distance);
-                    ctx.lineWidth = 4;
-                    ctx.strokeStyle = "#f0a";
+                if (getOption("approachControlPoints")) {
+                    for (const side of ['left', 'right']) {
+                        const morphed = fitSystemNewApproach(setPoints, side as any, distance);
+                        ctx.lineWidth = 4;
+                        ctx.strokeStyle = "#f0a";
 
-                    drawBezier(morphed, ctx, numberOfLines, 0);
-                    ctx.setLineDash([8, 8]);
-                    drawPolyline(ctx, morphed);
-                    ctx.setLineDash([]);
+                        drawBezier(morphed, ctx, numberOfLines, 0);
+                        ctx.setLineDash([8, 8]);
+                        drawPolyline(ctx, morphed);
+                        ctx.setLineDash([]);
 
-                    for (let i = 0; i < morphed.length; i++)
-                        debug(morphed[i], indexToLetter(i) + '_morphed_' + side);
+                        for (let i = 0; i < morphed.length; i++)
+                            debug(morphed[i], indexToLetter(i) + '_morphed_' + side);
+                    }
                 }
 
                 ctx.fillStyle = 'black';
                 ctx.strokeStyle = "#000";
 
-                drawPolyline(ctx, setPoints);
 
-                for (let i = 0; i < setPoints.length; i++)
-                    debug(setPoints[i], indexToLetter(i), draggedNodeIndex == i ? 'red' : 'orange');
             }
+
+            drawPolyline(ctx, setPoints);
+
+            for (let i = 0; i < setPoints.length; i++)
+                debug(setPoints[i], indexToLetter(i), draggedNodeIndex == i ? 'red' : 'orange');
 
             await awaitFrame();
         }
