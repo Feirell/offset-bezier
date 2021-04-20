@@ -3242,10 +3242,10 @@ nanomatch@^1.2.9:
     snapdragon "^0.8.1"
     to-regex "^3.0.1"
 
-nd-bezier@^1.1.1:
-  version "1.1.1"
-  resolved "https://registry.yarnpkg.com/nd-bezier/-/nd-bezier-1.1.1.tgz#be5eb3c99cb93d16780699c8bc5a9b3b69cb70d6"
-  integrity sha512-/AxXb6t7SpuiZ6TxYxc9xi1KOFErOJpxsXG8Pknlc5zwpx+thj9YxMOKp46Q9TCQbOfi4nOxCydOTgSSgfxoQg==
+nd-bezier@^2.2.1:
+  version "2.2.1"
+  resolved "https://registry.yarnpkg.com/nd-bezier/-/nd-bezier-2.2.1.tgz#3ca376e1578858f9c4b80b74b40949e9a9a19e2d"
+  integrity sha512-vXyuiaYas629CPP/GYf5cS0tPNSpUIRUWgem1lZ5/7ikuBm2RzRezw+iMaisxPksSa/o2uHiZ4NR065DOMZ0HQ==
   dependencies:
     linear-quadratic-cubic-eq-solver "^0.0.4"
 
