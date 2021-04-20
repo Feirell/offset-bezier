@@ -1,6 +1,11 @@
 import {EventEmitter} from "event-emitter-typesafe";
-import {fitSystemNewApproach, V2} from "./fit-system";
+import {V2} from "./fit-system";
 import {StaticBezier} from "nd-bezier";
+import {distance, offsetFnc, translateRealToUV, translateToRealBezier} from "./new-offset";
+import {arcLengthSubSections} from '../../nd-bezier/src/arc-length-sub-sections'
+import {bc} from "nd-bezier/lib/math-functions";
+import {DEBUG, DebugHandler} from "./debug-helper";
+import {intersection} from "./intersection";
 
 const height = 900;
 const width = 1400;
@@ -166,18 +171,253 @@ function drawOffsetBezier(ctx: CanvasRenderingContext2D, pinPoints: V2[], spikes
     ctx.strokeStyle = originalStrokeStyle;
 }
 
+export function dimensions(points: Vector2[]) {
+    if (points.length < 1)
+        throw new Error('Can not get the dimensions of zero points');
+
+    let minX = points[0][0];
+    let maxX = minX;
+
+    let minY = points[0][1];
+    let maxY = minY;
+
+    for (let i = 1; i < points.length; i++) {
+        const [x, y] = points[i];
+
+        if (x < minX)
+            minX = x;
+        else if (x > maxX)
+            maxX = x;
+
+        if (y < minY)
+            minY = y;
+        else if (y > maxY)
+            maxY = y;
+    }
+
+    return {xRange: [minX, maxX] as Vector2, yRange: [minY, maxY] as Vector2};
+}
+
+function produceScaler(marginPerc: number, dimensionOfSubSection: ReturnType<typeof dimensions>) {
+    const desiredXMin = width * marginPerc;
+    const desiredXMax = width * (1 - marginPerc);
+
+    const desiredYMin = height * marginPerc;
+    const desiredYMax = height * (1 - marginPerc);
+
+    const desiredSideRatio = (desiredXMax - desiredXMin) / (desiredYMax - desiredYMin);
+
+    let {xRange: [xMin, xMax], yRange: [yMin, yMax]} = dimensionOfSubSection;
+
+    const sectionSideRation = (xMax - xMin) / (yMax - yMin);
+
+    if (sectionSideRation < desiredSideRatio) {
+        const newWidthDelta = desiredSideRatio * (yMax - yMin) - (xMax - xMin);
+        xMin -= newWidthDelta / 2;
+        xMax += newWidthDelta / 2;
+    } else if (sectionSideRation > desiredSideRatio) {
+        const newHeightDelta = 1 / desiredSideRatio * (xMax - xMin) - (yMax - yMin);
+        yMin -= newHeightDelta / 2;
+        yMax += newHeightDelta / 2;
+    }
+
+    return ([x, y]: Vector2) => {
+        const newX = (x - xMin) / (xMax - xMin) * (desiredXMax - desiredXMin) + desiredXMin;
+        const newY = (y - yMin) / (yMax - yMin) * (desiredYMax - desiredYMin) + desiredYMin;
+
+        return [newX, newY] as V2;
+    };
+}
+
+const idToStr = (nr: number, start = 'a') => {
+    return String.fromCharCode(start.charCodeAt(0) + nr);
+}
+
+function printPoints(points: V2[], prefix: string) {
+    for (let i = 0; i < points.length; i++) {
+        const frmPos = arrFrm(points[i]);
+        const name = prefix + idToStr(i, 'A');
+        DEBUG_HANDLER.pushTextLine(name + ': ' + frmPos);
+    }
+}
+
+function includedDegree(a: Vector2, b: Vector2) {
+    const aLength = Math.sqrt(a[0] ** 2 + a[1] ** 2);
+    const bLength = Math.sqrt(b[0] ** 2 + b[1] ** 2);
+
+
+    return Math.acos((a[0] * b[0] + a[1] * b[1]) / (aLength * bLength));
+}
+
+function subVectors(a: Vector2, b: Vector2) {
+    return [
+        b[0] - a[0],
+        b[1] - a[1],
+    ] as Vector2;
+}
+
+(() => {
+    const a: Vector2 = [1, 0];
+    const b: Vector2 = [2, 1];
+    const c: Vector2 = [2, 2];
+
+    const res = includedDegree(
+        subVectors(b, a),
+        subVectors(b, c)
+    ) * 180 / Math.PI;
+
+    console.log('Degree: ' + res);
+})();
+
+function bernstein(n: number, i: number, t: number) {
+    return bc(n, i) * t ** i * (1 - t) ** (n - i);
+}
+
+function atWithBernstein(t: number, points: number[][]) {
+    const ret = points[0].map(v => 0);
+
+    for (let i = 0; i < points.length; i++) {
+        const bern = bernstein(points.length - 1, i, t);
+
+        const po = points[i];
+        for (let c = 0; c < ret.length; c++)
+            ret[c] += bern * po[c];
+    }
+
+    return ret;
+}
+
+function approximateBezierLength(points: V2[], segments: number) {
+    let sum = 0;
+    let last = points[0].slice(0);
+
+    for (let i = 0; i <= segments; i++) {
+        const t = i / segments;
+        const curr = atWithBernstein(t, points);
+        sum += Math.sqrt((curr[0] - last[0]) ** 2 + (curr[1] - last[1]) ** 2);
+        last[0] = curr[0];
+        last[1] = curr[1];
+    }
+
+    return sum;
+}
+
+(window as any).offset = 50;
+
+
+function faroukiApproach(ctx: CanvasRenderingContext2D, pinPoints: V2[]) {
+    if (pinPoints.length != 3)
+        return;
+
+    // const [a, b, c] = pinPoints.map(v => v.slice()) as Vector2[];
+    const [a, b, c] = pinPoints;
+    const {start, uvPoints: uvs} = translateRealToUV(a, b, c);
+
+    // return;
+
+    const actualBezier = translateToRealBezier(uvs, start.slice() as Vector2);
+
+    if (actualBezier === undefined)
+        return;
+
+    const offsetBezier = offsetFnc(uvs, (window as any).offset, start.slice() as Vector2);
+
+    const offsetPoints = offsetBezier.getPointsWithWeights().map(v => v.point.map(c => c / v.weight) as Vector2);
+    // const dimension = dimensions(offsetPoints.concat(actualBezier));
+    // const scaler = produceScaler(.05, dimension);
+    const offsetScaled = /*offsetPoints.map(scaler)*/ offsetPoints;
+    const actualScaled = /*actualBezier.map(scaler)*/ actualBezier;
+
+    printPoints(offsetPoints, 'offset');
+    printPoints(actualBezier, 'actual');
+
+
+    {
+        const [a, b, c, d] = actualBezier;
+        const thirdDegPoint = intersection(a, subVectors(b, a), c, subVectors(d, c));
+        if (thirdDegPoint != "parallel-or-identical") {
+            // const deltaAB = subVectors(b, a);
+            const expanded: V2[] = [];
+            expanded.push(a);
+            expanded.push([
+                1 / (2 + 1) * a[0] + (1 - 1 / (2 + 1)) * thirdDegPoint[0],
+                1 / (2 + 1) * a[1] + (1 - 1 / (2 + 1)) * thirdDegPoint[1],
+            ]);
+            expanded.push([
+                2 / (2 + 1) * thirdDegPoint[0] + (1 - 2 / (2 + 1)) * d[0],
+                2 / (2 + 1) * thirdDegPoint[1] + (1 - 2 / (2 + 1)) * d[1],
+            ]);
+            expanded.push(d);
+
+            debug(thirdDegPoint, 'b-third');
+            debug(expanded[1], 'b-fourth-new');
+            debug(expanded[2], 'c-fourth-new');
+        }
+    }
+
+    for (let i = 0; i < actualScaled.length - 2; i++) {
+        const prev = actualBezier[i];
+        const curr = actualBezier[i + 1];
+        const next = actualBezier[i + 2];
+
+        const degree = includedDegree(
+            subVectors(curr, prev),
+            subVectors(curr, next)
+        ) * 180 / Math.PI;
+
+        const letter = idToStr(i, '\u03B1');
+
+        const str = letter + ': ' + nrFrm(degree) + '° or ' + nrFrm(360 - degree) + '°';
+        DEBUG_HANDLER.pushTextLine(str);
+    }
+
+
+    const approx = arcLengthSubSections(new StaticBezier(actualBezier), 0, 1, 50);
+
+    // debugger;
+    const calculated = distance(uvs, 1);
+
+    DEBUG_HANDLER.pushTextLine('lengthApprox: ' + approx);
+    DEBUG_HANDLER.pushTextLine('lengthCalculated: ' + calculated);
+    DEBUG_HANDLER.pushTextLine('lengthApproxBern: ' + approximateBezierLength(actualBezier, 1000));
+    // distance()
+
+    const clr: FillStyle = 'lightblue';
+    ctx.fillStyle = clr;
+    ctx.strokeStyle = clr;
+    // drawParameterGraph(ctx, t => scaler(offsetBezier.at(t)), 20);
+    drawParameterGraph(ctx, t => offsetBezier.at(t), 20);
+    // drawPolyline(ctx, offsetScaled);
+    // drawPoints(ctx, scaled);
+
+    // for (let i = 0; i < offsetScaled.length; i++)
+    //     debug(offsetScaled[i], 'scaledOffset' + idToStr(i, 'A'), clr);
+
+    ctx.fillStyle = 'black';
+    ctx.strokeStyle = 'black';
+    drawBezier(actualScaled, ctx, 20);
+    drawPolyline(ctx, actualScaled);
+    for (let i = 0; i < actualScaled.length; i++)
+        debug(actualScaled[i], 'scaledActual' + idToStr(i, 'A'));
+
+}
+
+function drawParameterGraph(ctx: CanvasRenderingContext2D, fnc: (t: number) => Vector2, segments: number, tMin = 0, tMax = 1) {
+    const points: Vector2[] = [];
+
+    for (let i = 0; i <= segments; i++) {
+        points.push(fnc(i / segments) as Vector2);
+    }
+
+    drawPolyline(ctx, points);
+}
+
 function drawBezier(pinPoints: Vector2[], ctx: CanvasRenderingContext2D, lines: number, spikes = lines) {
     if (pinPoints.length < 2)
         return;
 
-    const bezier = new StaticBezier(pinPoints);
-    const points: Vector2[] = [];
-
-    for (let i = 0; i <= lines; i++) {
-        points.push(bezier.at(i / lines) as Vector2);
-    }
-
-    drawPolyline(ctx, points);
+    const bezier = new StaticBezier<number, 2>(pinPoints);
+    drawParameterGraph(ctx, t => bezier.at(t), lines);
 }
 
 const options = {
@@ -200,17 +440,20 @@ const frm = new Intl.NumberFormat('en-US', {
 const nrFrm = (nr: number) => frm(nr).padStart(7, ' ');
 const arrFrm = (arr: number[]) => '[' + arr.map(nrFrm).join(', ') + ']';
 
-let debugElem!: HTMLOutputElement;
+// let debugElem!: HTMLOutputElement;
 let context!: CanvasRenderingContext2D;
 
 type FillStyle = CanvasRenderingContext2D["fillStyle"];
 
+const DEBUG_HANDLER = new DebugHandler();
+DEBUG.registerDebugContentCollector(DEBUG_HANDLER);
+
 export function debug(point: V2, name: string, dotColor: FillStyle = 'black', textColor: FillStyle = 'black', radius: number = pointRadius) {
-    if (!debugElem || !context)
+    if (!context)
         return;
 
     const frmPos = arrFrm(point);
-    debugElem.innerText += name + ': ' + frmPos + '\n';
+    DEBUG_HANDLER.pushTextLine(name + ': ' + frmPos);
 
     const originalFill = context.fillStyle;
 
@@ -228,11 +471,11 @@ export function debug(point: V2, name: string, dotColor: FillStyle = 'black', te
 
 
 function initialize() {
-    const debugOutput = document.getElementById('debug-output') as HTMLOutputElement;
+    const debugOutputElem = document.getElementById('debug-output') as HTMLOutputElement;
     const canvas = document.getElementById('canvas') as HTMLCanvasElement;
     const optionContainer = document.getElementById('control') as HTMLDivElement;
 
-    debugElem = debugOutput;
+    DEBUG.setDebugElem(debugOutputElem);
 
     canvas.setAttribute('height', height + '');
     canvas.setAttribute('width', width + '');
@@ -394,11 +637,17 @@ function initialize() {
     const bottom = height - top;
     const right = width - left;
 
+    // let setPoints = [
+    //     [left + distance / 2, top + distance],
+    //     [right - distance / 2, top + distance],
+    //     [right - distance / 2, bottom - distance],
+    //     [left + distance / 2, bottom - distance]
+    // ] as Vector2[];
+
     let setPoints = [
-        [left + distance / 2, top + distance],
-        [right - distance / 2, top + distance],
-        [right - distance / 2, bottom - distance],
-        [left + distance / 2, bottom - distance]
+        [200, 200],
+        [400, 500],
+        [800, 500],
     ] as Vector2[];
 
     function getHitPoint(points: Vector2[], pos: Vector2, range: number): number | undefined {
@@ -430,7 +679,6 @@ function initialize() {
 
             const perc = (Math.sin(delta / 10000 * Math.PI) + 1) / 2;
             ctx.clearRect(0, 0, width, height);
-            debugElem.innerText = '';
 
             interface CombinedDragCommand {
                 start: boolean;
@@ -538,33 +786,35 @@ function initialize() {
 
             if (setPoints.length > 1) {
 
+                // ctx.fillStyle = 'black';
+                // ctx.lineWidth = 4;
+                // ctx.strokeStyle = "#000";
+                //
+                // drawBezier(setPoints, ctx, numberOfLines);
+
+                // if (getOption("approachDistance"))
+                //     drawOffsetBezier(ctx, setPoints, numberOfLines, distance, getOption("spikes"));
+
                 ctx.fillStyle = 'black';
-                ctx.lineWidth = 4;
                 ctx.strokeStyle = "#000";
 
-                drawBezier(setPoints, ctx, numberOfLines);
+                faroukiApproach(ctx, setPoints);
 
-                if (getOption("approachDistance"))
-                    drawOffsetBezier(ctx, setPoints, numberOfLines, distance, getOption("spikes"));
-
-                ctx.fillStyle = 'black';
-                ctx.strokeStyle = "#000";
-
-                if (getOption("approachControlPoints")) {
-                    for (const side of ['left', 'right']) {
-                        const morphed = fitSystemNewApproach(setPoints, side as any, distance);
-                        ctx.lineWidth = 4;
-                        ctx.strokeStyle = "#f0a";
-
-                        drawBezier(morphed, ctx, numberOfLines, 0);
-                        ctx.setLineDash([8, 8]);
-                        drawPolyline(ctx, morphed);
-                        ctx.setLineDash([]);
-
-                        for (let i = 0; i < morphed.length; i++)
-                            debug(morphed[i], indexToLetter(i) + '_morphed_' + side);
-                    }
-                }
+                // if (getOption("approachControlPoints")) {
+                //     for (const side of ['left', 'right']) {
+                //         const morphed = fitSystemNewApproach(setPoints, side as any, distance);
+                //         ctx.lineWidth = 4;
+                //         ctx.strokeStyle = "#f0a";
+                //
+                //         drawBezier(morphed, ctx, numberOfLines, 0);
+                //         ctx.setLineDash([8, 8]);
+                //         drawPolyline(ctx, morphed);
+                //         ctx.setLineDash([]);
+                //
+                //         for (let i = 0; i < morphed.length; i++)
+                //             debug(morphed[i], indexToLetter(i) + '_morphed_' + side);
+                //     }
+                // }
 
                 ctx.fillStyle = 'black';
                 ctx.strokeStyle = "#000";
@@ -572,7 +822,7 @@ function initialize() {
 
             }
 
-            drawPolyline(ctx, setPoints);
+            // drawPolyline(ctx, setPoints);
 
             for (let i = 0; i < setPoints.length; i++)
                 debug(setPoints[i], indexToLetter(i), draggedNodeIndex == i ? 'red' : 'orange');
